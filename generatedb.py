@@ -1,16 +1,18 @@
+import functools
+import multiprocessing as mp
+import random
 from os import listdir
 from os.path import isfile, join
 
 import matplotlib as mplt
-import matplotlib.pyplot as p
 import more_itertools as mi
 import numpy as np
 import pandas as pd
 import soundfile as sf
+from matplotlib import mlab
 from scipy import signal
-import pickle
 
-from database import Database
+from database import Database, Connection
 
 
 def generate_footprint(song_array, samplerate):
@@ -38,8 +40,11 @@ def generate_footprint(song_array, samplerate):
     number_of_points = lambda time_mils, samplerate: int((time_mils / 1000) * samplerate)
     decimated_signal = compressed_df['avg_filtered']
     smpl_rate = samplerate / 8
-    spec, freq, t, img = p.specgram(decimated_signal, Fs=smpl_rate, NFFT=number_of_points(50, smpl_rate),
-                                    window=mplt.mlab.window_hanning)
+
+    spec, freq, t = mlab.specgram(decimated_signal, Fs=smpl_rate, NFFT=number_of_points(50, smpl_rate),
+                                  window=mplt.mlab.window_hanning)
+    # spec, freq, t, img = p.specgram(decimated_signal, Fs=smpl_rate, NFFT=number_of_points(50, smpl_rate),
+    #                                 window=mplt.mlab.window_hanning)
     bands = np.concatenate((np.array([0]), np.geomspace(300, 2000, num=21)[1:], np.array([np.inf])), axis=None)
     buckets = list(mi.pairwise(bands))
 
@@ -68,21 +73,58 @@ def generate_footprint(song_array, samplerate):
     return generate_h(new_spec)
 
 
-def generate_db():
-    path = "/home/leonardo/Documents/seniales/tp/extras"
+def make_db_with_songs(song, connection=Connection):
+    print("%s processing \n" % song)
+    name = random.randint(0, 2 ** 16)
+    db = Database(connection(), str(name))
+    save_song(db, song)
+    print("%s processed \n" % song)
+    return db
+
+
+def generate_db(path, db_name, make_connection):
+    print("collecting songs")
+
+    songs = get_song_paths(path)
+
+    print("Songs found: %i" % len(songs))
+
+    db = make_db(songs, db_name, make_connection)
+
+    save_db(db, db_name, path)
+    print("Finished")
+
+    return db
+
+
+def save_db(db, db_name, path):
+    filename = path
+    db.set_path(filename)
+    db.set_name(db_name)
+    db.flush()
+
+
+def make_db(songs, db_name, make_connection=Connection):
+    p = mp.Pool(4)
+    dbs = p.map(make_db_with_songs, songs)
+    print('Merging db\'s')
+    db = functools.reduce(lambda db1, db2: db1 + db2, dbs)
+    return db
+
+
+def get_song_paths(path):
     filenames = [f for f in listdir(path) if isfile(join(path, f))]
-    songs = [name for name in filenames if name.endswith(".ogg")]
-    db = Database()
-    #make multiprocessing
-    for song in songs:
-        save_song(db, song)
-    filename = 'db_file'
-    outfile = open(filename, 'wb')
-    pickle.dump(db, outfile)
-    outfile.close()
+    songs = [path + '/' + name for name in filenames if name.endswith(".ogg")]
+    return songs
 
 
 def save_song(db, song):
     data, samplerate = sf.read(song)
-    footprint = generate_footprint(song, samplerate)
-    db.save_footprint(footprint)
+    footprint = generate_footprint(data, samplerate)
+    song_id = song.split('/')[-1]
+    db.save_footprint(song_id, footprint)
+
+
+if __name__ == '__main__':
+    path = "/home/leonardo/Documents/seniales/tp/test_songs"
+    generate_db(path, "main_db", Connection)

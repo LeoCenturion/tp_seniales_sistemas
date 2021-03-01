@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import pickle
 from collections import Counter
 import more_itertools as mi
@@ -30,7 +31,7 @@ class Database:
         frame_count = len(footprint[0])
         matches = sorted(filter(lambda id_frame: id_frame[1] <= frame_count,
                                 mi.flatten(
-                                    map(lambda frame: self.connection.query_by_footprint(list(frame)), footprint.T))),
+                                    map(lambda frame: self.connection.query_by_footprint(frame), footprint.T))),
                          key=lambda kv: kv[0])
         appearances_count = map(lambda id_list: (id_list[0], mi.ilen(id_list[1])),
                                 i.groupby(matches, key=lambda kv: kv[0]))
@@ -56,24 +57,27 @@ class Connection:
         f.close()
         return conn
 
-    def save(self, id, footprint, frame_index):
-        hash = self.hash_footprint(footprint)
+    def save(self, id, spectrum, frame_index):
+        hash = self.hash_spectrum(spectrum)
         if hash in self.inverted_index:
             self.inverted_index[hash] += [(id, frame_index)]
         else:
             self.inverted_index[hash] = [(id, frame_index)]
 
         if id in self.data:
-            self.data[id] += [footprint]
+            self.data[id] += [spectrum]
         else:
-            self.data[id] = [footprint]
+            self.data[id] = [spectrum]
 
     @staticmethod
-    def hash_footprint(footprint):
-        return sum(footprint)
+    def hash_spectrum(spec):
+        hash = hashlib.blake2b(spec.tobytes(), digest_size=20)
+        for dim in spec.shape:
+            hash.update(dim.to_bytes(4, byteorder='big'))
+        return hash.digest()
 
     def query_by_footprint(self, fp):
-        return self.inverted_index.get(self.hash_footprint(fp), [])
+        return self.inverted_index.get(self.hash_spectrum(fp), [])
 
     @staticmethod
     def merge_dicts(dict1, dict2):

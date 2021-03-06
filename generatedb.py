@@ -13,8 +13,13 @@ from scipy import signal
 from database import Database, Connection
 
 
-def generate_footprint(song_array, samplerate):
-    spec, freq, t = generate_specgram(samplerate, song_array)
+def stereo2mono(stereo):
+    return (stereo[:, 0] + stereo[:, 1]) / 2
+
+
+def generate_footprint(data, fs):
+    mono = stereo2mono(data)
+    spec, freq, t = generate_specgram(fs, mono)
 
     buckets = generate_buckets()
 
@@ -42,43 +47,52 @@ def find_new_freq_band(f, bands):
 
 
 def remap_frequencies(spectrum, freq, buckets):
-    freq_to_energy_list = zip(spectrum, freq)
+    freq_to_energy_list = zip(spectrum ** 2, freq)
     energy_band_new_relation = map(
         lambda energy_freq: (energy_freq[0], find_new_freq_band(energy_freq[1], buckets)), freq_to_energy_list)
     grouped_by_frequencies = mi.groupby_transform(energy_band_new_relation, lambda e_f: e_f[1], lambda e_f: e_f[0])
     frequency_energy_sum = map(lambda kv: (kv[0], sum(kv[1])), grouped_by_frequencies)
-    return list(mi.unzip(frequency_energy_sum)[1])
+    return list(mi.unzip(frequency_energy_sum)[1])[1:-1]
 
 
 def generate_buckets():
-    bands = np.concatenate((np.array([0]), np.geomspace(300, 2000, num=21)[1:], np.array([np.inf])), axis=None)
+    bands = np.concatenate((np.array([0]), np.geomspace(300, 2000, num=22), np.array([np.inf])), axis=None)
+
     return list(mi.pairwise(bands))
 
 
-def generate_specgram(samplerate, song_array):
-    df = pd.DataFrame(song_array)
-    df['t'] = df.index / samplerate
-    df['avg'] = df[[0, 1]].apply(np.average, axis=1)
-    df['fft'] = np.fft.fft(df['avg'])
+def generate_specgram(samplerate, mono):
+    # df = pd.DataFrame(mono)
+    # df['t'] = df.index / samplerate
+    # df['avg'] = df[0]
     fs = samplerate
     nyq = fs / 2
-    length = 80
+    length = filter_order = 87
     f_high = 5512 / 2
-    b = signal.firwin(length, cutoff=f_high / nyq, window="hann")
-    op_1 = signal.lfilter(b, 1, df['avg'])
-    fft = np.fft.fft(op_1)
-    df['avg_filtered'] = op_1
-    df['avg_filtered_fft'] = fft
-    compression_factor = 8
-    compress_sample_df = lambda df, compression_factor: df[df.index % compression_factor == 0]
-    compressed_df = compress_sample_df(df[['t', 'avg_filtered']], compression_factor).reset_index(inplace=False)
-    compressed_df['avg_filtered_fft'] = np.fft.fft(compressed_df['avg_filtered'])
-    number_of_points = lambda time_mils, samplerate: int((time_mils / 1000) * samplerate)
-    decimated_signal = compressed_df['avg_filtered']
-    smpl_rate = samplerate / 8
-    spec, freq, t = mlab.specgram(decimated_signal, Fs=smpl_rate, NFFT=number_of_points(100, smpl_rate),
-                                  window=mplt.mlab.window_hanning)
-    return spec, freq, t
+    window = "hamming"
+    b = signal.firwin(length, cutoff=f_high / nyq, window=window, pass_zero='lowpass')
+    num = b
+    dec = np.zeros(len(b))
+    dec[0] = 1
+    decimation = 8
+    n = 2 ** 12
+    dlti = signal.dlti(num, dec)
+    mono_dec = signal.decimate(mono, 8, ftype=dlti, n=filter_order)
+    fxx, txx, sxx = signal.spectrogram(mono_dec, fs=fs / decimation, window=window, nperseg=n,
+                                       noverlap=np.round(n * .9), mode='magnitude')
+    # op_1 = signal.lfilter(b, 1, df['avg'])
+    # df['avg_filtered'] = op_1
+    # compression_factor = 8
+    # compress_sample_df = lambda df, compression_factor: df[df.index % compression_factor == 0]
+    # compressed_df = compress_sample_df(df[['t', 'avg_filtered']], compression_factor).reset_index(inplace=False)
+    # # compressed_df['avg_filtered_fft'] = np.fft.fft(compressed_df['avg_filtered'])
+    # number_of_points = lambda time_mils, samplerate: int((time_mils / 1000) * samplerate)
+    # # decimated_signal = compressed_df['avg_filtered']
+    # smpl_rate = samplerate / 8
+    # spec, freq, t = mlab.specgram(compressed_df['avg_filtered'], Fs=smpl_rate, NFFT=number_of_points(100, smpl_rate),
+    #                               window=mplt.mlab.window_hanning)
+    # return spec, freq, t
+    return sxx, fxx, txx
 
 
 def make_db_with_songs(song, connection=Connection):
@@ -136,8 +150,9 @@ def save_db(db, db_name, path):
 
 
 def make_db(songs, db_name, make_connection=Connection):
-    p = mp.Pool(2)
+    p = mp.Pool(4)
     dbs = p.map(make_db_with_songs, songs)
+    p.close()
     # dbs = list(map(make_db_with_songs, songs))
     print('Merging db\'s')
     db = functools.reduce(lambda db1, db2: db1 + db2, dbs)
@@ -158,5 +173,5 @@ def save_song(db, song):
 
 
 if __name__ == '__main__':
-    path = "/home/leonardo/Documents/seniales/tp/40songs"
+    path = "/home/leonardo/Documents/seniales/tp/10songs"
     generate_db(path, "main_db", Connection)

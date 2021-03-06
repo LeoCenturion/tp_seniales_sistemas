@@ -1,42 +1,53 @@
 import random
-from itertools import product
+from itertools import product, repeat
 
 import soundfile as sf
 
 from database import Connection, Database
 from generatedb import generate_footprint, get_song_paths
 import numpy as np
+import multiprocessing as mp
+
+
+def _perform_query(query_db):
+    return perform_query(query_db[0], query_db[1])
 
 
 def clean_song_accuracy_test(songs, db, n=40):
     print("Started clean song accuracy test with %i songs" % n)
     songs_to_test = select_random_songs_with_duplicates(songs, n)
-    segment_sizes = [5, 5, 5]
+    segment_sizes = [5, 10, 20]
     song_arrays = map(sf.read, songs_to_test)
     queries = product(song_arrays, segment_sizes)
-
-    predictions = map(lambda query: perform_query(query, db), queries)
+    predictions = run_all_queries(db, queries)
     # l = predictions
     # print(list(l))
     hits = map(lambda pred_query: (check_hit(pred_query), pred_query),
                zip(predictions, product(songs_to_test, segment_sizes)))
-    return hits
+    return list(hits)
+
+
+def run_all_queries(db, queries):
+    p = mp.Pool(4)
+    predictions = p.map(_perform_query, zip(queries, repeat(db)))
+    p.close()
+    return predictions
 
 
 def noisy_song_accuracy_test(songs, db, n=40):
     print("Started clean song accuracy test with %i songs" % n)
     songs_to_test = select_random_songs_with_duplicates(songs, n)
-    segment_sizes = [5, 5, 5]
+    segment_sizes = [5, 10, 20]
     noise_levels_db = [0, 10, 20]
     songs_info = map(sf.read, songs_to_test)
     song_arrays = map(add_noise_to_song_info,
                       product(songs_info, noise_levels_db))
 
     queries = product(song_arrays, segment_sizes)
-    predictions = map(lambda query: perform_query(query, db), queries)
+    predictions = run_all_queries(db, queries)
     hits = map(lambda p_song: (check_hit((p_song[0], p_song[1][:2])), p_song),
                zip(predictions, product(songs_to_test, noise_levels_db, segment_sizes)))
-    return hits
+    return list(hits)
 
 
 def add_noise_to_song_info(songinfo_srn):
@@ -61,7 +72,7 @@ def perform_query(query, db):
     song_length = len(song_array)
     song_start = int(random.random() * (song_length - window_length))
     truncated_song = song_array[song_start:song_start + window_length]
-    print("Performing query with  window size %i" % window_size_seconds)
+    # print("Performing query with  window size %i" % window_size_seconds)
     footprint = generate_footprint(truncated_song, samplerate)
     return db.query(footprint)
 
@@ -69,7 +80,7 @@ def perform_query(query, db):
 def check_hit(prediction_query):
     prediction, query = prediction_query
     song_name, window_size_seconds = query
-    song_name = song_name.split("/")[-1].split(".")[0]
+    song_name = song_name.split("/")[-1]
     songs_predicted = map(lambda name_score: name_score[0], prediction)
     return any(map(lambda pred: song_name == pred, songs_predicted))
 
@@ -90,7 +101,7 @@ def make_noise(signal, target_snr_db):
 if __name__ == '__main__':
     seed = 2 ** 64 - 1
     random.seed(seed)
-    path = "/home/leonardo/Documents/seniales/tp/40songs"
+    path = "/home/leonardo/Documents/seniales/tp/10songs"
     db_path = path + "/main_db"
     songs = get_song_paths(path)
     db = Database(Connection.from_disk(db_path), "acc_test_db")
@@ -102,7 +113,8 @@ if __name__ == '__main__':
         queries_count += 1
         predictions, query = predictions_query
         song, window_size = query
-        print("Song: %s \t window size: %i \t hit: %s" % (song, window_size, is_hit))
+        # print(predictions)
+        print("%s \t  %i \t %s" % (song.split("/")[-1], window_size, is_hit))
     print(hit_count, queries_count)
     hits = noisy_song_accuracy_test(songs, db, 10)
     hit_count = 0
@@ -112,5 +124,5 @@ if __name__ == '__main__':
         queries_count += 1
         predictions, query = predictions_query
         song, noise_level, window_size = query
-        print("Song: %s \t window size: %i \t hit: %s \t noise: %i" % (song, window_size, is_hit, noise_level))
+        print("%s \t  %i \t  %s \t  %i" % (song.split("/")[-1], window_size, is_hit, noise_level))
     print(hit_count, queries_count)

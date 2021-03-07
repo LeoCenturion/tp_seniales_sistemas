@@ -10,7 +10,7 @@ import soundfile as sf
 from matplotlib import mlab
 from scipy import signal
 
-from database import Database, Connection
+from database import Database, Connection, DB
 
 
 def stereo2mono(stereo):
@@ -18,8 +18,8 @@ def stereo2mono(stereo):
 
 
 def generate_footprint(data, fs):
-    mono = stereo2mono(data)
-    spec, freq, t = generate_specgram(fs, mono)
+    # mono = stereo2mono(data)
+    spec, freq, t = generate_specgram(fs, data)
 
     buckets = generate_buckets()
 
@@ -172,6 +172,29 @@ def save_song(db, song):
     db.save_footprint(song_id, footprint)
 
 
+def generate_db2(path):
+    # Incializo tabla hash
+    files = get_song_paths(path)
+    hash_nbits = 20  # Cantidad de bits de los hashes
+    n_entries = len(files)  # Cantidad de columnas de la tabla; cant canciones
+    ID_nbits = 12  # Cantidad de bits para ID numerico de la cancion
+    db = DB(hash_nbits, n_entries, ID_nbits, np.zeros((2 ** hash_nbits, n_entries), dtype=np.uint32))
+
+    for k in range(n_entries):
+        file_path = files[k]
+        # Muestro por consola el archivo que analizamos
+        track, fs = sf.read(file_path)
+        # Generamos la huella acustica H
+        sound_print = generate_footprint(track, fs)
+        #     print(sound_print)
+        # Guardamos la huella en la DB. A esta cancion se asigna el
+        # identificador numerico k, el cual se guarda en la base de datos
+        # La matriz H debera ser una matriz con elementos binarios de
+        # hash_nbits filas
+        db.save_footprint(k + 1, sound_print)
+    db.set_path(path + "/main_db")
+    db.flush()
+
 if __name__ == '__main__':
     path = "/home/leonardo/Documents/seniales/tp/10songs"
-    generate_db(path, "main_db", Connection)
+    generate_db2(path)

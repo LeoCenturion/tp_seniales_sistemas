@@ -3,8 +3,8 @@ from itertools import product, repeat
 
 import soundfile as sf
 
-from database import Connection, Database
-from generatedb import generate_footprint, get_song_paths
+from database import Connection, Database, DB
+from generatedb import generate_footprint, get_song_paths, stereo2mono
 import numpy as np
 import multiprocessing as mp
 
@@ -98,7 +98,7 @@ def make_noise(signal, target_snr_db):
     return np.random.normal(mean_noise, np.sqrt(noise_avg_watts), len(signal_power))
 
 
-if __name__ == '__main__':
+def run_all():
     seed = 2 ** 64 - 1
     random.seed(seed)
     path = "/home/leonardo/Documents/seniales/tp/10songs"
@@ -126,3 +126,126 @@ if __name__ == '__main__':
         song, noise_level, window_size = query
         print("%s \t  %i \t  %s \t  %i" % (song.split("/")[-1], window_size, is_hit, noise_level))
     print(hit_count, queries_count)
+
+
+def run_all2():
+    files = get_song_paths("./10songs/")
+    hash_nbits = 20  # Cantidad de bits de los hashes
+    n_entries = len(files)  # Cantidad de columnas de la tabla; cant canciones
+    ID_nbits = 12  # Cantidad de bits para ID numerico de la cancion
+    # Tamanio en memoria para hash de 20 bits: 4MB x N_columnas
+    db = DB.from_disk(hash_nbits, n_entries, ID_nbits, "/home/leonardo/Documents/seniales/tp/10songs/main_db")
+
+    T = [5, 10, 20]
+    N = 50
+    ids = []
+    matches = []
+    songs = []
+    last = 0
+    for time in T:
+        for i in range(N):
+            #         now = datetime.now()
+            #         timestamp = datetime.timestamp(now)
+            #         print(timestamp - last)
+            #         last = timestamp
+            #         print(i)
+            print(time, i)
+            n_song = random.randint(0, len(files) - 1)
+            file = files[n_song]
+            track, fs = sf.read(file)
+            start = random.randint(0, len(track) - fs * time - 1)
+            end = start + fs * time
+            sound_print = generate_footprint(stereo2mono(track[start:end]), fs)
+            id, match = db.query(sound_print)
+            ids.append(id)
+            matches.append(match)
+            songs.append(n_song + 1)
+
+    count = 0
+    for i in range(50):
+        if songs[i] == ids[i][0]:
+            count += 1
+    five_sec = count
+    print('5s hits:', five_sec, 'out of 50')
+    print(str(five_sec * 100 / 50) + '%')
+    count = 0
+    for i in range(50, 100):
+        if songs[i] == ids[i][0]:
+            count += 1
+    ten_sec = count
+    print('10s hits:', ten_sec, 'out of 50')
+    print(str(ten_sec * 100 / 50) + '%')
+    count = 0
+    for i in range(100, 150):
+        if songs[i] == ids[i][0]:
+            count += 1
+    twenty_sec = count
+    print('20s hits:', twenty_sec, 'out of 50')
+    print(str(twenty_sec * 100 / 50) + '%')
+    total = five_sec + ten_sec + twenty_sec
+    first = np.round(total * 100 / 150, 2)
+    print('Total hits:', total, 'out of 150')
+    print(str(first) + '%')
+
+    def add_noise(track, SNR):
+        noise = np.random.randn(1, len(track))
+        noise = np.array(noise[0])
+
+        variance = np.var(track)
+        alfa = np.sqrt(variance / (10 ** (SNR / 10)))
+        norm_noise = noise * alfa ** 2
+
+        return track + norm_noise
+
+    T = [5, 10, 20]
+    SNR = [0, 10, 20]
+    N = 50
+    ids = []
+    matches = []
+    songs = []
+    i = 0
+    for time in T:
+        ids.append([])
+        matches.append([])
+        songs.append([])
+        for j in range(len(SNR)):
+            ids[i].append([])
+            matches[i].append([])
+            songs[i].append([])
+            for k in range(N):
+                #             print(k)
+                print(time, j, k)
+                n_song = random.randint(0, len(files) - 1)
+                file = files[n_song]
+                track, fs = sf.read(file)
+                start = random.randint(0, len(track) - fs * time - 1)
+                end = start + fs * time
+                track_chunk = stereo2mono(track[start:end])
+                track_w_noise = add_noise(track_chunk, SNR[j])
+
+                sound_print = generate_footprint(track_w_noise, fs)
+                id, match = db.query(sound_print)
+
+                ids[i][j].append(id)
+                matches[i][j].append(match)
+                songs[i][j].append(n_song + 1)
+        i += 1
+
+    total = 0
+    for i in range(len(T)):
+        for j in range(len(SNR)):
+            count = 0
+            for k in range(N):
+                if songs[i][j][k] == ids[i][j][k][0]:
+                    count += 1
+            print('Time:', T[i], 'secs.', 'SNR:', SNR[j])
+            print('Hits:', count, 'out of 50')
+            print('Porcentage:', str(count * 100 / 50) + '%')
+            print('')
+            total += count
+    print('Hits:', total, 'out of 450')
+    print('Porcentage:', str(total * 100 / 450) + '%')
+
+
+if __name__ == '__main__':
+    run_all2()
